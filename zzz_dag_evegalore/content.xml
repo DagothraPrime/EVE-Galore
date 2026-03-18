@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<content id="zzz_dag_evegalore"
+         name="New EVEn Ship Expansion"
+         description="Core Shared Assets for the EVE Galore ship and faction expansion"
+         author="Dagothra"
+         version="0.1"
+         date="2026-03-17"
+         save="1"
+         enabled="1">
+  <dependency id="reemergence" optional="false" name="X4:Reemergence"/>
+</content>
