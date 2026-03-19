@@ -1,0 +1,273 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  EVE Galore - Jetcan Mining
+  Phase 0: Mine resources, deliver to a designated collection ship.
+  
+  Uses vanilla order.mining.collect.ship for actual mining extraction
+  (handles asteroid shooting, chunk collection, drones, IS/OOS).
+  When mining completes, delivers to the collection ship via
+  remove_cargo + add_cargo, then returns to mine again.
+  
+  Does NOT require subordinate relationship — the collection ship
+  is just a param. Works as a standalone order on any mining ship.
+  
+  Author: DagothraPrime
+-->
+<aiscript name="order.evg.jetcanmine"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="aiscripts.xsd"
+          version="1">
+
+  <order id="EVGJetcanMine" name="{86420,201}" description="{86420,202}"
+         category="mining" infinite="true" allowinloop="true">
+    <params>
+      <param name="collectship" type="object" default="null"
+             text="{86420,210}" comment="Collection ship to deliver to">
+        <input_param name="class" value="[class.ship_l, class.ship_xl]"/>
+      </param>
+      <param name="resourceware" type="ware" default="null"
+             text="{86420,211}" comment="Resource to mine (blank = auto)">
+        <input_param name="cancarry" value="this.assignedcontrolled"/>
+        <input_param name="isminable" value="true"/>
+      </param>
+      <param name="directtransfer" type="bool" default="true"
+             text="{86420,214}" comment="Direct transfer or jetcan drop"/>
+      <param name="debugmode" type="bool" default="false"
+             text="{86420,220}" comment="Verbose logging"/>
+    </params>
+    <requires primarypurpose="purpose.mine"/>
+  </order>
+
+  <interrupts>
+    <handler ref="AttackHandler"/>
+    <handler ref="MissileLockHandler"/>
+    <handler ref="ScannedHandler"/>
+    <handler ref="InspectedHandler"/>
+    <handler ref="FoundAbandonedHandler"/>
+    <handler ref="FoundLockboxHandler"/>
+    <handler ref="ResupplyHandler"/>
+    <handler ref="SectorChangeHandler"/>
+    <handler ref="TideHandler"/>
+  </interrupts>
+
+  <init>
+    <set_value name="$logname" exact="'EVGJetcanMine'"/>
+    <set_value name="$logdir" exact="'EVGFleetOps'"/>
+
+    <set_command command="command.mining"/>
+
+    <do_if value="$debugmode">
+      <debug_to_file name="$logname" directory="$logdir"
+                     text="'=== EVG Jetcan Miner Init === Ship: %s CollectShip: %s'
+                           .[this.assignedcontrolled.knownname,
+                             if $collectship != null then $collectship.knownname
+                             else 'NONE']"
+                     append="false"/>
+    </do_if>
+  </init>
+
+  <attention min="unknown">
+    <actions>
+      <label name="start"/>
+
+      <!-- ======================================= -->
+      <!-- STEP 0: Validate collection ship        -->
+      <!-- ======================================= -->
+      <label name="validate_collectship"/>
+
+      <do_if value="$collectship == null or not $collectship.exists">
+        <!-- Try commander as fallback -->
+        <do_if value="this.assignedcontrolled.commander != null
+                      and this.assignedcontrolled.commander.exists">
+          <set_value name="$collectship" exact="this.assignedcontrolled.commander"/>
+        </do_if>
+        <do_else>
+          <do_if value="$debugmode">
+            <debug_to_file name="$logname" directory="$logdir"
+                           text="'No valid collection ship. Holding position.'"
+                           append="true"/>
+          </do_if>
+          <wait exact="30s"/>
+          <resume label="validate_collectship"/>
+        </do_else>
+      </do_if>
+
+      <!-- Required for infinite orders -->
+      <set_order_syncpoint_reached order="this.assignedcontrolled.order"/>
+
+      <set_command_action commandaction="commandaction.searchingresources"/>
+
+      <!-- ======================================= -->
+      <!-- STEP 1: Determine what to mine          -->
+      <!-- ======================================= -->
+      <label name="find_resource"/>
+
+      <set_value name="$mineware" exact="$resourceware"/>
+      <set_value name="$minepos" exact="null"/>
+      <set_value name="$minesector" exact="$collectship.sector"/>
+
+      <!-- Auto-detect resource if not specified -->
+      <do_if value="$mineware == null">
+        <set_value name="$sectorwares" exact="$collectship.sector.resources"/>
+        <do_if value="$debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'Auto-detect: sector %s has %s resource types'
+                               .[$collectship.sector.knownname, $sectorwares.count]"
+                         append="true"/>
+        </do_if>
+        <!-- Pick first resource this ship can carry -->
+        <do_for_each name="$candidate" in="$sectorwares">
+          <do_if value="this.assignedcontrolled.cargo.{$candidate}.free gt 0">
+            <set_value name="$mineware" exact="$candidate"/>
+            <break/>
+          </do_if>
+        </do_for_each>
+      </do_if>
+
+      <do_if value="$mineware == null">
+        <do_if value="$debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'No mineable resource found in %s'
+                               .[$collectship.sector.knownname]"
+                         append="true"/>
+        </do_if>
+        <wait exact="30s"/>
+        <resume label="find_resource"/>
+      </do_if>
+
+      <!-- Find the closest resource position -->
+      <set_value name="$result_sector" exact="null"/>
+      <find_closest_resource ware="$mineware"
+                             refobject="$collectship"
+                             sector="$result_sector"
+                             position="$minepos"/>
+
+      <do_if value="$result_sector != null">
+        <set_value name="$minesector" exact="$result_sector"/>
+      </do_if>
+
+      <do_if value="$minepos == null">
+        <do_if value="$debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'find_closest_resource returned no position for %s'
+                               .[$mineware]"
+                         append="true"/>
+        </do_if>
+        <wait exact="30s"/>
+        <resume label="find_resource"/>
+      </do_if>
+
+      <do_if value="$debugmode">
+        <debug_to_file name="$logname" directory="$logdir"
+                       text="'Mining %s in %s'
+                             .[$mineware, $minesector.knownname]"
+                       append="true"/>
+      </do_if>
+
+      <!-- ======================================= -->
+      <!-- STEP 2: Mine using vanilla routine      -->
+      <!-- ======================================= -->
+      <label name="mine_resources"/>
+
+      <set_command_action commandaction="commandaction.searchingresources"/>
+
+      <!--
+        order.mining.collect.ship is the vanilla mining collection script.
+        It handles flying to resource, shooting asteroids, collecting
+        chunks with drones, and filling cargo. Returns when full or
+        resources depleted.
+      -->
+      <run_script name="'order.mining.collect.ship'" result="$collectResult">
+        <param name="destination" value="[$minesector, $minepos]"/>
+        <param name="ware" value="$mineware"/>
+        <param name="debugchance" value="if $debugmode then 100 else 0"/>
+      </run_script>
+
+      <do_if value="$debugmode">
+        <set_value name="$fillvol" exact="this.assignedcontrolled.cargo.capacity.all
+                                          - this.assignedcontrolled.cargo.free.all"/>
+        <set_value name="$totalvol" exact="this.assignedcontrolled.cargo.capacity.all"/>
+        <debug_to_file name="$logname" directory="$logdir"
+                       text="'Mining collect returned: %s, cargo: %s/%s'
+                             .[$collectResult, $fillvol, $totalvol]"
+                       append="true"/>
+      </do_if>
+
+      <!-- ======================================= -->
+      <!-- STEP 3: Check cargo and deliver         -->
+      <!-- ======================================= -->
+      <set_value name="$freevol" exact="this.assignedcontrolled.cargo.free.all"/>
+      <set_value name="$totalvol" exact="this.assignedcontrolled.cargo.capacity.all"/>
+
+      <!-- If cargo has anything, deliver to collection ship -->
+      <do_if value="$freevol lt $totalvol">
+        <resume label="deliver_cargo"/>
+      </do_if>
+
+      <!-- Nothing mined — try again -->
+      <wait min="5s" max="10s"/>
+      <resume label="find_resource"/>
+
+      <!-- ======================================= -->
+      <!-- STEP 4: Deliver cargo to collection ship -->
+      <!-- ======================================= -->
+      <label name="deliver_cargo"/>
+
+      <set_command_action commandaction="commandaction.flyingto" param="$collectship"/>
+
+      <do_if value="$collectship == null or not $collectship.exists">
+        <resume label="validate_collectship"/>
+      </do_if>
+
+      <!-- Fly to collection ship -->
+      <move_to object="this.assignedcontrolled" destination="$collectship"
+               finishonapproach="true" travel="true"/>
+
+      <do_if value="$directtransfer">
+        <!-- DIRECT TRANSFER: remove from miner, add to collection ship -->
+        <do_all exact="this.assignedcontrolled.cargo.count" counter="$ti">
+          <set_value name="$tware" exact="this.assignedcontrolled.cargo.{$ti}"/>
+          <set_value name="$tamount" exact="this.assignedcontrolled.cargo.{$tware}.count"/>
+          <do_if value="$tamount gt 0">
+            <set_value name="$actually_removed" exact="0"/>
+            <remove_cargo object="this.assignedcontrolled" ware="$tware"
+                         exact="$tamount" result="$actually_removed"/>
+            <do_if value="$actually_removed gt 0">
+              <set_value name="$actually_added" exact="0"/>
+              <add_cargo object="$collectship" ware="$tware"
+                        exact="$actually_removed" result="$actually_added"/>
+              <do_if value="$debugmode">
+                <debug_to_file name="$logname" directory="$logdir"
+                               text="'Transferred %s x %s to %s (removed: %s, added: %s)'
+                                     .[$tamount, $tware, $collectship.knownname,
+                                       $actually_removed, $actually_added]"
+                               append="true"/>
+              </do_if>
+            </do_if>
+          </do_if>
+        </do_all>
+      </do_if>
+      <do_else>
+        <!-- JETCAN DROP: drop cargo near collection ship -->
+        <do_all exact="this.assignedcontrolled.cargo.count" counter="$di">
+          <set_value name="$dware" exact="this.assignedcontrolled.cargo.{$di}"/>
+          <set_value name="$damount" exact="this.assignedcontrolled.cargo.{$dware}.count"/>
+          <do_if value="$damount gt 0">
+            <drop_cargo object="this.assignedcontrolled" ware="$dware" exact="$damount"/>
+            <do_if value="$debugmode">
+              <debug_to_file name="$logname" directory="$logdir"
+                             text="'Dropped %s x %s near %s'
+                                   .[$damount, $dware, $collectship.knownname]"
+                             append="true"/>
+            </do_if>
+          </do_if>
+        </do_all>
+      </do_else>
+
+      <!-- Return to mining -->
+      <set_command_action commandaction="commandaction.searchingresources"/>
+      <resume label="find_resource"/>
+
+    </actions>
+  </attention>
+</aiscript>

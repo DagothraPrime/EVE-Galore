@@ -1,11 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<content id="zzz_dag_evegalore"
-         name="New EVEn Ship Expansion"
-         description="Core Shared Assets for the EVE Galore ship and faction expansion"
-         author="Dagothra"
-         version="0.1"
-         date="2026-03-17"
-         save="1"
-         enabled="1">
-  <dependency id="reemergence" optional="false" name="X4:Reemergence"/>
+<!--
+  EVE Galore - Phase 0 Test Build
+  Ship/ware-agnostic fleet operation scripts
+  Author: DagothraPrime
+-->
+<content
+  id="zzz_dag_evegalore"
+  name="EVE Galore"
+  description="EVE Online-inspired fleet operations for X4. Phase 0: Command Ship, Jetcan Mining, Fleet Trader, ORE Command Config."
+  author="DagothraPrime"
+  version="010"
+  date="2026-03-18"
+  save="false"
+>
 </content>

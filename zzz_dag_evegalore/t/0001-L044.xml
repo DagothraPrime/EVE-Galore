@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  EVE Galore - Localization (English)
+  Page 86420 reserved for EVG mod strings
+-->
+<language id="44">
+  <page id="86420" title="EVE Galore" descr="EVE Galore mod strings">
+
+    <!-- Command Ship Order (101-150) -->
+    <t id="101">EVG: Command Ship</t>
+    <t id="102">Anchor a capital ship as a fleet command point. Cargo drones automatically collect nearby drops. Subordinate miners deliver here, subordinate traders haul cargo to sell.</t>
+    <t id="112">Collection Range</t>
+    <t id="113">Trader Dispatch Threshold (%)</t>
+    <t id="114">Trader Max Sectors</t>
+    <t id="115">Override: Sell Station</t>
+    <t id="120">Debug Logging</t>
+
+    <!-- Jetcan Mining Order (201-250) -->
+    <t id="201">EVG: Jetcan Mine</t>
+    <t id="202">Mine resources near a Command Ship and deliver cargo via direct transfer or jetcan drop. Requires a commander with the Command Ship or ORE Command order active.</t>
+    <t id="210">Collection Ship</t>
+    <t id="211">Resource (blank = auto)</t>
+    <t id="212">Max Range from Commander</t>
+    <t id="213">Deliver at Cargo Fill (%)</t>
+    <t id="214">Direct Transfer (off = Jetcan Drop)</t>
+    <t id="220">Debug Logging</t>
+
+    <!-- Fleet Trader Order (301-350) -->
+    <t id="301">EVG: Fleet Trader</t>
+    <t id="302">Service a Command Ship by hauling cargo to sell. Evaluates commander's inventory, loads the best trade, sells at market or a designated station, then returns.</t>
+    <t id="310">Command Ship</t>
+    <t id="312">Override: Sell Station</t>
+    <t id="315">Idle Poll Interval (s)</t>
+    <t id="320">Debug Logging</t>
+
+    <!-- ORE Command Config Order (401-450) -->
+    <t id="401">EVG: ORE Mining Worksite</t>
+    <t id="402">Activate Industrial Core mode. Locks the ship in place, enables ore compression, and coordinates subordinate miners and traders. Requires ORE Command software. (Compression requires compressed ore wares to be defined.)</t>
+    <t id="412">Enable Compression</t>
+    <t id="413">Compression Batch Size</t>
+    <t id="414">Trader Dispatch Threshold (%)</t>
+    <t id="416">Override: Sell Station</t>
+    <t id="420">Debug Logging</t>
+
+  </page>
+</language>

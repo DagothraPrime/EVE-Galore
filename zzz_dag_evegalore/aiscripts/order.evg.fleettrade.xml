@@ -1,0 +1,290 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  EVE Galore - Fleet Trader
+  Phase 0: Ship/ware-agnostic trade hauler for Command Ship
+  
+  Traders fly to their commander, evaluate cargo, find the best
+  buy offer for the most valuable ware, load it via free transfer,
+  fly to the buyer, execute the trade, and return.
+  
+  Author: DagothraPrime
+-->
+<aiscript name="order.evg.fleettrade"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="aiscripts.xsd"
+          version="1">
+
+  <order id="EVGFleetTrade" name="{86420,301}" description="{86420,302}"
+         category="trade" infinite="true" allowinloop="false">
+    <params>
+      <param name="commander" type="object" default="this.assignedcontrolled.commander"
+             text="{86420,310}" comment="Command Ship to service"/>
+      <param name="targetstation" type="object" default="null"
+             text="{86420,312}" comment="Override sell station"/>
+      <param name="pollinterval" type="number" default="30"
+             text="{86420,315}" comment="Idle poll interval (seconds)">
+        <input_param name="step" value="5"/>
+        <input_param name="min" value="10"/>
+        <input_param name="max" value="120"/>
+      </param>
+      <param name="debugmode" type="bool" default="false"
+             text="{86420,320}" comment="Verbose logging"/>
+    </params>
+    <requires>
+      <match_any>
+        <match class="ship_m"/>
+        <match class="ship_l"/>
+      </match_any>
+    </requires>
+  </order>
+
+  <interrupts>
+    <handler ref="SectorChangeHandler"/>
+    <handler ref="AttackHandler"/>
+  </interrupts>
+
+  <init>
+    <set_value name="$logname" exact="'EVGFleetTrade'"/>
+    <set_value name="$logdir" exact="'EVGFleetOps'"/>
+
+    <do_if value="$debugmode">
+      <debug_to_file name="$logname" directory="$logdir"
+                     text="'=== EVG Fleet Trader Init === Ship: %s Commander: %s'
+                           .[this.assignedcontrolled.knownname,
+                             if $commander != null then $commander.knownname
+                             else 'NONE']"
+                     append="false"/>
+    </do_if>
+  </init>
+
+  <attention min="unknown">
+    <actions>
+      <label name="start"/>
+
+      <!-- ======================================= -->
+      <!-- STEP 0: Validate commander              -->
+      <!-- ======================================= -->
+      <label name="validate_commander"/>
+
+      <do_if value="$commander == null or not $commander.exists">
+        <do_if value="$debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'No valid commander. Holding position.'"
+                         append="true"/>
+        </do_if>
+        <wait exact="30s"/>
+        <set_value name="$commander" exact="this.assignedcontrolled.commander"/>
+        <resume label="validate_commander"/>
+      </do_if>
+
+      <!-- Required for infinite orders -->
+      <set_order_syncpoint_reached order="this.assignedcontrolled.order"/>
+
+      <!-- Set ship icon in map -->
+      <set_command command="command.trade"/>
+
+      <!-- ======================================= -->
+      <!-- STEP 1: Fly to commander                -->
+      <!-- ======================================= -->
+      <label name="goto_commander"/>
+
+      <set_command_action commandaction="commandaction.flyingto" param="$commander"/>
+
+      <move_to object="this.assignedcontrolled" destination="$commander"
+               finishonapproach="true" travel="true"/>
+
+      <!-- ======================================= -->
+      <!-- STEP 2: Evaluate commander's cargo      -->
+      <!-- ======================================= -->
+      <label name="evaluate_cargo"/>
+
+      <set_command_action commandaction="commandaction.searchingtrades"/>
+
+      <set_value name="$cmdcargo_count" exact="$commander.cargo.count"/>
+
+      <!-- Nothing to haul — wait and retry -->
+      <do_if value="$cmdcargo_count == 0">
+        <do_if value="$debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'Commander cargo empty — waiting %ss'
+                               .[$pollinterval]"
+                         append="true"/>
+        </do_if>
+        <wait exact="$pollinterval * 1s"/>
+        <resume label="evaluate_cargo"/>
+      </do_if>
+
+      <!-- Find best ware + buyer combo -->
+      <set_value name="$bestware" exact="null"/>
+      <set_value name="$bestoffer" exact="null"/>
+      <set_value name="$bestscore" exact="0"/>
+      <set_value name="$bestamount" exact="0"/>
+
+      <do_all exact="$cmdcargo_count" counter="$ei">
+        <set_value name="$eware" exact="$commander.cargo.{$ei}"/>
+        <set_value name="$eavailable" exact="$commander.cargo.{$eware}.count"/>
+
+        <do_if value="$eavailable le 0">
+          <continue/>
+        </do_if>
+
+        <do_if value="$targetstation != null">
+          <!-- Override mode: just pick the ware with the most units -->
+          <do_if value="$eavailable gt $bestamount">
+            <set_value name="$bestware" exact="$eware"/>
+            <set_value name="$bestamount" exact="$eavailable"/>
+          </do_if>
+        </do_if>
+        <do_else>
+          <!-- Market mode: find a station that wants to BUY this ware -->
+          <!-- find_buy_offer finds stations with active buy offers -->
+          <find_buy_offer result="$candidate_offer"
+                          tradepartner="this.assignedcontrolled"
+                          wares="$eware"
+                          space="$commander.sector"/>
+
+          <do_if value="$candidate_offer != null
+                        and $candidate_offer.exists
+                        and $candidate_offer.available">
+            <set_value name="$score"
+                       exact="[$eavailable, $candidate_offer.amount].min
+                              * $candidate_offer.unitprice"/>
+            <do_if value="$score gt $bestscore">
+              <set_value name="$bestware" exact="$eware"/>
+              <set_value name="$bestoffer" exact="$candidate_offer"/>
+              <set_value name="$bestscore" exact="$score"/>
+              <set_value name="$bestamount" exact="$eavailable"/>
+            </do_if>
+          </do_if>
+        </do_else>
+      </do_all>
+
+      <!-- No viable trade -->
+      <do_if value="$bestware == null">
+        <do_if value="$debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'No profitable trade found — waiting'"
+                         append="true"/>
+        </do_if>
+        <wait exact="$pollinterval * 1s"/>
+        <resume label="evaluate_cargo"/>
+      </do_if>
+
+      <!-- ======================================= -->
+      <!-- STEP 3: Load cargo from commander       -->
+      <!-- ======================================= -->
+      <label name="load_cargo"/>
+
+      <!-- Calculate how much we can carry (volume-based) -->
+      <set_value name="$myfree" exact="this.assignedcontrolled.cargo.free.all"/>
+      <set_value name="$waresize" exact="$bestware.volume"/>
+      <set_value name="$cancarry" exact="0"/>
+      <do_if value="$waresize gt 0">
+        <set_value name="$cancarry" exact="$myfree / $waresize"/>
+      </do_if>
+      <set_value name="$toload" exact="[$bestamount, $cancarry].min"/>
+
+      <do_if value="$toload le 0">
+        <do_if value="$debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'Cannot carry any %s (free: %s, vol/unit: %s)'
+                               .[$bestware, $myfree, $waresize]"
+                         append="true"/>
+        </do_if>
+        <wait exact="$pollinterval * 1s"/>
+        <resume label="evaluate_cargo"/>
+      </do_if>
+
+      <do_if value="$debugmode">
+        <debug_to_file name="$logname" directory="$logdir"
+                       text="'Loading %s x %s from %s'
+                             .[$toload, $bestware, $commander.knownname]"
+                       append="true"/>
+      </do_if>
+
+      <!-- Transfer from commander to self: remove from commander, add to trader -->
+      <set_value name="$load_removed" exact="0"/>
+      <remove_cargo object="$commander" ware="$bestware"
+                   exact="$toload" result="$load_removed"/>
+      <do_if value="$load_removed gt 0">
+        <set_value name="$load_added" exact="0"/>
+        <add_cargo object="this.assignedcontrolled" ware="$bestware"
+                  exact="$load_removed" result="$load_added"/>
+        <do_if value="$debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'Loaded %s x %s from %s'
+                               .[$load_added, $bestware, $commander.knownname]"
+                         append="true"/>
+        </do_if>
+      </do_if>
+      <do_else>
+        <!-- Commander lost the cargo between evaluation and loading -->
+        <do_if value="$debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'Failed to load — commander no longer has %s'
+                               .[$bestware]"
+                         append="true"/>
+        </do_if>
+        <wait exact="$pollinterval * 1s"/>
+        <resume label="evaluate_cargo"/>
+      </do_else>
+
+      <!-- ======================================= -->
+      <!-- STEP 4: Sell cargo                      -->
+      <!-- ======================================= -->
+      <label name="sell_cargo"/>
+
+      <set_command_action commandaction="commandaction.executingtrade"/>
+
+      <do_if value="$targetstation != null">
+        <!-- Override: fly to designated station, sell there -->
+        <move_to object="this.assignedcontrolled" destination="$targetstation"
+                 finishonapproach="false" travel="true"/>
+
+        <!-- Find the station's buy offer for our ware -->
+        <find_buy_offer result="$selloffer"
+                        tradepartner="this.assignedcontrolled"
+                        wares="$bestware"
+                        buyer="$targetstation"/>
+
+        <do_if value="$selloffer != null and $selloffer.available">
+          <execute_trade tradeoffer="$selloffer" tradepartner="this.assignedcontrolled"/>
+          <do_if value="$debugmode">
+            <debug_to_file name="$logname" directory="$logdir"
+                           text="'Sold %s at %s'
+                                 .[$bestware, $targetstation.knownname]"
+                           append="true"/>
+          </do_if>
+        </do_if>
+        <do_else>
+          <do_if value="$debugmode">
+            <debug_to_file name="$logname" directory="$logdir"
+                           text="'WARNING: %s has no buy offer for %s'
+                                 .[$targetstation.knownname, $bestware]"
+                           append="true"/>
+          </do_if>
+          <!-- TODO: fallback — try market, or dump at station -->
+        </do_else>
+      </do_if>
+      <do_else>
+        <!-- Market mode: sell using the offer we found earlier -->
+        <do_if value="$bestoffer != null and $bestoffer.available">
+          <move_to object="this.assignedcontrolled" destination="$bestoffer.owner"
+                   finishonapproach="false" travel="true"/>
+          <execute_trade tradeoffer="$bestoffer" tradepartner="this.assignedcontrolled"/>
+          <do_if value="$debugmode">
+            <debug_to_file name="$logname" directory="$logdir"
+                           text="'Sold %s at %s for %sCr/unit'
+                                 .[$bestware, $bestoffer.owner.knownname,
+                                   $bestoffer.unitprice]"
+                           append="true"/>
+          </do_if>
+        </do_if>
+      </do_else>
+
+      <!-- Return for next load -->
+      <resume label="goto_commander"/>
+
+    </actions>
+  </attention>
+</aiscript>

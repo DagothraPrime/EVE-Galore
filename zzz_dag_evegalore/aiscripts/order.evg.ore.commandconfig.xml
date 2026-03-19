@@ -1,0 +1,234 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  EVE Galore - ORE Command Configuration (Industrial Core)
+  Phase 0: Siege-mode command ship with compression placeholder
+  
+  Activates "Industrial Core" — locks the ship in place, monitors
+  cargo, coordinates fleet. Compression cycle is scaffolded but
+  requires compressed ore ware definitions in wares.xml to function.
+  
+  Without compression wares defined, this order behaves identically
+  to EVGCommandShip but with movement lock and emergency hull unlock.
+  
+  Author: DagothraPrime
+-->
+<aiscript name="order.evg.ore.commandconfig"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="aiscripts.xsd"
+          version="1">
+
+  <order id="EVGORECommandConfig" name="{86420,401}" description="{86420,402}"
+         category="mining" infinite="true" allowinloop="false">
+    <params>
+      <param name="compressionenabled" type="bool" default="true"
+             text="{86420,412}" comment="Enable ore compression"/>
+      <param name="compressionbatch" type="number" default="100"
+             text="{86420,413}" comment="Units per compression cycle">
+        <input_param name="step" value="25"/>
+        <input_param name="min" value="25"/>
+        <input_param name="max" value="500"/>
+      </param>
+      <param name="cargothreshold" type="number" default="70"
+             text="{86420,414}" comment="Cargo fill pct to dispatch traders">
+        <input_param name="step" value="5"/>
+        <input_param name="min" value="20"/>
+        <input_param name="max" value="95"/>
+      </param>
+      <param name="tradestation" type="object" default="null"
+             text="{86420,416}" comment="Override sell station"/>
+      <param name="debugmode" type="bool" default="false"
+             text="{86420,420}" comment="Verbose logging"/>
+    </params>
+    <requires>
+      <match_any>
+        <match class="ship_l"/>
+        <match class="ship_xl"/>
+      </match_any>
+    </requires>
+  </order>
+
+  <interrupts>
+    <handler ref="AttackHandler"/>
+  </interrupts>
+
+  <init>
+    <set_value name="$logname" exact="'EVGORECommand'"/>
+    <set_value name="$logdir" exact="'EVGFleetOps'"/>
+    <set_value name="$core_active" exact="false"/>
+
+    <!-- Orca (L) = 60s cycle, Rorqual (XL) = 30s -->
+    <set_value name="$cycletime" exact="30s"/>
+    <do_if value="this.assignedcontrolled.isclass.ship_l">
+      <set_value name="$cycletime" exact="60s"/>
+    </do_if>
+
+    <!--
+      COMPRESSION TABLE:
+      Maps raw ware -> compressed ware. Empty in Phase 0.
+      Populated when compressed ore wares are added to wares.xml.
+      
+      Phase 1 will build this table from ware tags:
+      compressed wares tagged evg_compressed with a source property
+      pointing back to the raw ware ID.
+      
+      For now, compression is a no-op.
+    -->
+    <create_list name="$compress_raw"/>
+    <create_list name="$compress_out"/>
+    <!-- Example entries for when wares exist:
+    <append_to_list name="$compress_raw" exact="ware.ore"/>
+    <append_to_list name="$compress_out" exact="ware.evg_compressed_ore"/>
+    <append_to_list name="$compress_raw" exact="ware.silicon"/>
+    <append_to_list name="$compress_out" exact="ware.evg_compressed_silicon"/>
+    -->
+
+    <do_if value="$debugmode">
+      <debug_to_file name="$logname" directory="$logdir"
+                     text="'=== ORE Command Config Init === Ship: %s Class: %s Cycle: %ss CompressTable: %s entries'
+                           .[this.assignedcontrolled.knownname,
+                             if this.assignedcontrolled.isclass.ship_xl then 'XL' else 'L',
+                             $cycletime, $compress_raw.count]"
+                     append="false"/>
+    </do_if>
+  </init>
+
+  <attention min="unknown">
+    <actions>
+      <label name="start"/>
+
+      <!-- ======================================= -->
+      <!-- PHASE 1: Activate Industrial Core       -->
+      <!-- ======================================= -->
+      <stop_moving object="this.assignedcontrolled" immediate="true"/>
+      <set_flight_control_model object="this.assignedcontrolled"
+                                flightcontrolmodel="flightcontrolmodel.linear"/>
+      <set_value name="$core_active" exact="true"/>
+
+      <do_if value="$debugmode">
+        <debug_to_file name="$logname" directory="$logdir"
+                       text="'INDUSTRIAL CORE ONLINE — Ship locked'"
+                       append="true"/>
+      </do_if>
+
+      <!-- Required for infinite orders -->
+      <set_order_syncpoint_reached order="this.assignedcontrolled.order"/>
+
+      <!-- Set ship icon in map -->
+      <set_command command="command.mining"/>
+      <set_command_action commandaction="commandaction.standingby"/>
+
+      <label name="mainloop"/>
+
+      <!-- Re-enforce position lock every tick -->
+      <stop_moving object="this.assignedcontrolled" immediate="true"/>
+
+      <!-- ======================================= -->
+      <!-- PHASE 2: Compression cycle              -->
+      <!-- ======================================= -->
+      <do_if value="$compressionenabled and $core_active
+                    and $compress_raw.count gt 0">
+
+        <!-- For each registered raw->compressed mapping -->
+        <do_all exact="$compress_raw.count" counter="$ci">
+          <set_value name="$rawware" exact="$compress_raw.{$ci}"/>
+          <set_value name="$compware" exact="$compress_out.{$ci}"/>
+
+          <!-- Check if we have enough raw ore for a batch -->
+          <do_if value="this.assignedcontrolled.cargo.{$rawware}.exists
+                        and this.assignedcontrolled.cargo.{$rawware}.count ge $compressionbatch">
+
+            <!-- Remove raw ore -->
+            <set_value name="$removed" exact="0"/>
+            <remove_cargo object="this.assignedcontrolled" ware="$rawware"
+                         exact="$compressionbatch" result="$removed"/>
+
+            <do_if value="$removed gt 0">
+              <!-- Add compressed ore (same unit count, 1/5 volume) -->
+              <set_value name="$added" exact="0"/>
+              <add_cargo object="this.assignedcontrolled" ware="$compware"
+                        exact="$removed" result="$added"/>
+
+              <do_if value="$debugmode">
+                <debug_to_file name="$logname" directory="$logdir"
+                               text="'Compressed: %s x %s -> %s x %s'
+                                     .[$removed, $rawware, $added, $compware]"
+                               append="true"/>
+              </do_if>
+            </do_if>
+          </do_if>
+        </do_all>
+      </do_if>
+
+      <!-- ======================================= -->
+      <!-- PHASE 3: Cargo monitoring               -->
+      <!-- ======================================= -->
+      <set_value name="$totalvol" exact="this.assignedcontrolled.cargo.capacity.all"/>
+      <set_value name="$freevol" exact="this.assignedcontrolled.cargo.free.all"/>
+      <set_value name="$fillpct" exact="0"/>
+      <do_if value="$totalvol gt 0">
+        <set_value name="$fillpct"
+                   exact="(($totalvol - $freevol) * 100) / $totalvol"/>
+      </do_if>
+
+      <!-- Stall warning: cargo nearly full, no traders -->
+      <do_if value="$fillpct ge 95">
+        <set_value name="$has_traders" exact="false"/>
+        <do_all exact="this.assignedcontrolled.subordinates.count" counter="$si">
+          <set_value name="$sub" exact="this.assignedcontrolled.subordinates.{$si}"/>
+          <do_if value="$sub.order != null
+                        and $sub.order.id == 'EVGFleetTrade'">
+            <set_value name="$has_traders" exact="true"/>
+          </do_if>
+        </do_all>
+        <do_if value="not $has_traders and $debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'WARNING: Cargo at %s%%, no traders assigned!'
+                               .[$fillpct]"
+                         append="true"/>
+        </do_if>
+      </do_if>
+
+      <do_if value="$debugmode">
+        <debug_to_file name="$logname" directory="$logdir"
+                       text="'Tick: %s%% full, core=%s, compress_wares=%s'
+                             .[$fillpct, $core_active, $compress_raw.count]"
+                       append="true"/>
+      </do_if>
+
+      <!-- Emergency hull check (replaces interrupt — check_value 
+           can't be used as interrupt condition without an event) -->
+      <do_if value="this.assignedcontrolled.hullpercentage lt 25 and $core_active">
+        <do_if value="$debugmode">
+          <debug_to_file name="$logname" directory="$logdir"
+                         text="'EMERGENCY: Hull at %s%% — unlocking Industrial Core'
+                               .[this.assignedcontrolled.hullpercentage]"
+                         append="true"/>
+        </do_if>
+        <resume label="emergency_unlock"/>
+      </do_if>
+
+      <wait exact="$cycletime"/>
+      <resume label="mainloop"/>
+
+      <!-- ======================================= -->
+      <!-- EMERGENCY UNLOCK                        -->
+      <!-- ======================================= -->
+      <label name="emergency_unlock"/>
+      <set_value name="$core_active" exact="false"/>
+      <set_to_default_flight_control_model object="this.assignedcontrolled"/>
+
+      <do_if value="$debugmode">
+        <debug_to_file name="$logname" directory="$logdir"
+                       text="'Industrial Core OFFLINE — emergency unlock'"
+                       append="true"/>
+      </do_if>
+
+      <wait exact="60s"/>
+      <do_if value="this.assignedcontrolled.hullpercentage ge 50">
+        <resume label="start"/>
+      </do_if>
+      <resume label="emergency_unlock"/>
+
+    </actions>
+  </attention>
+</aiscript>

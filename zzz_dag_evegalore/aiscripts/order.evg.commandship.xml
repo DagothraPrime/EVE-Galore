@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  EVE Galore - Command Ship Orchestration
+  Phase 0: Ship/ware-agnostic fleet anchor point
+  
+  The command ship parks in place and lets its cargo drones
+  collect drops from subordinate miners. Fleet traders poll
+  the commander's cargo and haul it to sell.
+  
+  Author: DagothraPrime
+-->
+<aiscript name="order.evg.commandship"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:noNamespaceSchemaLocation="aiscripts.xsd"
+          version="1">
+
+  <order id="EVGCommandShip" name="{86420,101}" description="{86420,102}"
+         category="trade" infinite="true" allowinloop="false">
+    <params>
+      <param name="collectrange" type="length" default="15km"
+             text="{86420,112}" comment="Cargo drone collection range">
+        <input_param name="step" value="1km"/>
+        <input_param name="min" value="5km"/>
+        <input_param name="max" value="50km"/>
+      </param>
+      <param name="cargothreshold" type="number" default="80"
+             text="{86420,113}" comment="Cargo fill pct to signal traders">
+        <input_param name="step" value="5"/>
+        <input_param name="min" value="20"/>
+        <input_param name="max" value="100"/>
+      </param>
+      <param name="tradeboundary" type="number" default="3"
+             text="{86420,114}" comment="Max sectors for traders">
+        <input_param name="step" value="1"/>
+        <input_param name="min" value="1"/>
+        <input_param name="max" value="20"/>
+      </param>
+      <param name="tradestation" type="object" default="null"
+             text="{86420,115}" comment="Override sell station"/>
+      <param name="debugmode" type="bool" default="false"
+             text="{86420,120}" comment="Verbose logging"/>
+    </params>
+    <requires>
+      <match_any>
+        <match class="ship_l"/>
+        <match class="ship_xl"/>
+      </match_any>
+    </requires>
+  </order>
+
+  <interrupts>
+    <handler ref="SectorChangeHandler"/>
+    <handler ref="AttackHandler"/>
+  </interrupts>
+
+  <init>
+    <set_value name="$logname" exact="'EVGCommandShip'"/>
+    <set_value name="$logdir" exact="'EVGFleetOps'"/>
+    <set_value name="$tickinterval" exact="10s"/>
+
+    <do_if value="$debugmode">
+      <debug_to_file name="$logname" directory="$logdir"
+                     text="'=== EVG Command Ship Init === Ship: %s Sector: %s'
+                           .[this.assignedcontrolled.knownname, this.sector.knownname]"
+                     append="false"/>
+    </do_if>
+  </init>
+
+  <attention min="unknown">
+    <actions>
+      <label name="start"/>
+
+      <stop_moving object="this.assignedcontrolled" immediate="true"/>
+
+      <!-- Required for infinite orders — tells engine the order is operational -->
+      <set_order_syncpoint_reached order="this.assignedcontrolled.order"/>
+
+      <!-- Set ship icon in map -->
+      <set_command command="command.collect"/>
+      <set_command_action commandaction="commandaction.standingby"/>
+
+      <label name="mainloop"/>
+
+      <!-- Cargo drone collection is automatic for L/XL ships -->
+      <!-- with dockingbay allowunits + cargotube configured  -->
+
+      <!-- Volume-based cargo fill percentage -->
+      <set_value name="$totalvol" exact="this.assignedcontrolled.cargo.capacity.all"/>
+      <set_value name="$freevol" exact="this.assignedcontrolled.cargo.free.all"/>
+      <set_value name="$fillpct" exact="0"/>
+      <do_if value="$totalvol gt 0">
+        <set_value name="$fillpct"
+                   exact="(($totalvol - $freevol) * 100) / $totalvol"/>
+      </do_if>
+
+      <do_if value="$debugmode">
+        <set_value name="$subcount" exact="this.assignedcontrolled.subordinates.count"/>
+        <debug_to_file name="$logname" directory="$logdir"
+                       text="'Tick: vol=%s/%s (%s%% full), subs=%s'
+                             .[$totalvol - $freevol, $totalvol,
+                               $fillpct, $subcount]"
+                       append="true"/>
+      </do_if>
+
+      <wait exact="$tickinterval"/>
+      <resume label="mainloop"/>
+
+    </actions>
+  </attention>
+</aiscript>
