@@ -137,11 +137,19 @@
         </do_if>
         <do_else>
           <!-- Market mode: find a station that wants to BUY this ware -->
-          <!-- find_buy_offer finds stations with active buy offers -->
+          <!-- Search the whole cluster, not just commander's sector -->
           <find_buy_offer result="$candidate_offer"
                           tradepartner="this.assignedcontrolled"
                           wares="$eware"
-                          space="$commander.sector"/>
+                          space="$commander.cluster"/>
+
+          <do_if value="$debugmode and ($candidate_offer == null
+                        or not $candidate_offer.exists)">
+            <debug_to_file name="$logname" directory="$logdir"
+                           text="'No buy offer found for %s in cluster'
+                                 .[$eware]"
+                           append="true"/>
+          </do_if>
 
           <do_if value="$candidate_offer != null
                         and $candidate_offer.exists

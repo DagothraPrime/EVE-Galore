@@ -119,8 +119,20 @@
         <do_for_each name="$candidate" in="$sectorwares">
           <do_if value="this.assignedcontrolled.cargo.{$candidate}.free gt 0">
             <set_value name="$mineware" exact="$candidate"/>
+            <do_if value="$debugmode">
+              <debug_to_file name="$logname" directory="$logdir"
+                             text="'Auto-selected ware: %s'.[$mineware]"
+                             append="true"/>
+            </do_if>
             <break/>
           </do_if>
+          <do_else>
+            <do_if value="$debugmode">
+              <debug_to_file name="$logname" directory="$logdir"
+                             text="'Skipping %s — ship cannot carry'.[$candidate]"
+                             append="true"/>
+            </do_if>
+          </do_else>
         </do_for_each>
       </do_if>
 
@@ -135,21 +147,72 @@
         <resume label="find_resource"/>
       </do_if>
 
-      <!-- Find the closest resource position -->
-      <set_value name="$result_sector" exact="null"/>
-      <find_closest_resource ware="$mineware"
-                             refobject="$collectship"
-                             sector="$result_sector"
-                             position="$minepos"/>
-
-      <do_if value="$result_sector != null">
-        <set_value name="$minesector" exact="$result_sector"/>
+      <!--
+        For minerals: use find_asteroid_in_cluster to find actual asteroids
+        (proven pattern from Mining in Sector mod). This gives the vanilla
+        mining script a real asteroid to aim at instead of a vague region.
+        
+        For liquids (gas): use find_closest_resource for a region position.
+        Gas mining doesn't target specific asteroids.
+      -->
+      <do_if value="$mineware.hastag.mineral">
+        <!-- MINERAL: Find actual asteroid -->
+        <find_asteroid_in_cluster name="$asteroids"
+                                  cluster="$minesector.cluster"
+                                  refobject="$collectship"
+                                  ware="$mineware"
+                                  maxdistance="$minesector.coresize"
+                                  multiple="true"/>
+        <do_if value="$asteroids.count gt 0">
+          <!-- Sort by distance to collection ship, pick closest -->
+          <sort_list list="$asteroids"
+                     sortbyvalue="$collectship.distanceto.{loop.element}"
+                     sortdescending="false"/>
+          <create_position name="$minepos" space="$minesector"
+                           object="$asteroids.{1}" min="200m" max="1km"/>
+          <do_if value="$debugmode">
+            <debug_to_file name="$logname" directory="$logdir"
+                           text="'Found %s asteroids for %s, targeting closest at %sm'
+                                 .[$asteroids.count, $mineware,
+                                   $collectship.distanceto.{$asteroids.{1}}]"
+                           append="true"/>
+          </do_if>
+          <remove_value name="$asteroids"/>
+        </do_if>
+        <do_else>
+          <!-- No asteroids found, fall back to find_closest_resource -->
+          <do_if value="$debugmode">
+            <debug_to_file name="$logname" directory="$logdir"
+                           text="'No asteroids for %s, trying find_closest_resource'
+                                 .[$mineware]"
+                           append="true"/>
+          </do_if>
+          <find_closest_resource ware="$mineware"
+                                 refobject="$collectship"
+                                 sector="$result_sector"
+                                 position="$minepos"/>
+          <do_if value="$result_sector != null">
+            <set_value name="$minesector" exact="$result_sector"/>
+          </do_if>
+        </do_else>
       </do_if>
+      <do_else>
+        <!-- LIQUID/GAS: Use find_closest_resource -->
+        <set_value name="$result_sector" exact="null"/>
+        <find_closest_resource ware="$mineware"
+                               refobject="$collectship"
+                               sector="$result_sector"
+                               position="$minepos"/>
+        <do_if value="$result_sector != null">
+          <set_value name="$minesector" exact="$result_sector"/>
+        </do_if>
+      </do_else>
 
+      <!-- Final check -->
       <do_if value="$minepos == null">
         <do_if value="$debugmode">
           <debug_to_file name="$logname" directory="$logdir"
-                         text="'find_closest_resource returned no position for %s'
+                         text="'Cannot find minable position for %s'
                                .[$mineware]"
                          append="true"/>
         </do_if>
